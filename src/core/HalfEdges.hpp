@@ -63,7 +63,9 @@ public:
 
   // constructor performs most of the work
 
-          HalfEdges(const int nV, const vector<int>& coordIndex);
+    HalfEdges(const int nV, const vector<int>& coordIndex);
+
+    void _classifyEdge(int iE);
 
   // returns the number of elements of the coordIndex array
 
@@ -142,26 +144,32 @@ public:
   
 protected:
 
-  // reference to the coordIndex passed as argument
-  const vector<int>& _coordIndex;
+    bool _isValidCorner(const int iC) const;
+    bool _isValidEdge(const int iE) const;
 
-  // - consider these private variables as just a hints
-  // - feel free to use different private variables
+    int _nF;
 
-  // array of twin corners
-  vector<int>  _twin;
+    // reference to the coordIndex passed as argument
+    const vector<int>& _coordIndex;
 
-  // mapping from corners to faces
-        vector<int> _face;
+    // - consider these private variables are just a hint
+    // - feel free to use different private variables
 
-  // the half-edge to edge incidence relations is represented as an
-  // arrray of arrays
-        vector<int> _firstCornerEdge;
-        vector<int> _cornerEdge;
+    // array of twin corners
+    vector<int> _twin;
 
-  // TODO Mon Mar 6 2023
-  //
-  // - add any additional variables you need to make it work
+    // mapping from corners to faces
+    vector<int> _face;
+
+    // the half-edge to edge incidence relations is represented as an
+    // arrray of arrays
+    vector<int> _firstCornerEdge;
+    vector<int> _cornerEdge;
+
+
+  bool _hasBoundaryEdges;
+  bool _hasRegularEdges;
+  bool _hasSingularEdges;
 
 };
 

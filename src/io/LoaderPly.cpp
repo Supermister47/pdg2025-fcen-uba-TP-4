@@ -769,7 +769,7 @@ bool LoaderPly::load
 
     // insert into scene graph
     Shape* s = new Shape();
-    s->setName("POINTS");
+    s->setName("SURFACE");
     Appearance* a = new Appearance();
     if(ply->getTextureFile()!="") {
       ImageTexture* it = new ImageTexture();

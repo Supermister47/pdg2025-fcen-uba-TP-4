@@ -44,6 +44,9 @@
 
 #include <vector>
 #include "HalfEdges.hpp"
+#include "Graph.hpp"
+#include "Faces.hpp"
+#include "Partition.hpp"
 
 using namespace std;
 
@@ -71,7 +74,13 @@ public:
   // int     getTwin(const int iC) const;
   // int     getNumberOfFaceEdges(const int iE);
 
-             PolygonMesh(const int nV, const vector<int>& coordIndex);
+    PolygonMesh(const int nV, const vector<int>& coordIndex);
+
+    void _createIsBoundaryVertex(int nV, int nE);
+
+    void _create_nPartsVertex(const int nVertices, int nC, Partition& partition);
+
+    void _createDualGraph();
 
   // number of -1's in the coordIndex argument
 
@@ -188,7 +197,10 @@ public:
   // - note that isolated singular vertices play no role in this
   //   definition (since cuting through them does not affect
   //   orientation)
-  bool isOrientable() const; 
+  bool isOrientable() const;
+  void _addAllHalfEdgesTo(int& iC_j, std::vector<int>& cornerStack) const;
+  bool _isOrientableInvertingFaces(vector<bool>& invertFace) const;
+ 
 
   // orient
   // - implementation requires a dual graph traversal algorithm
@@ -268,9 +280,10 @@ public:
   (vector<int>& vIndexMap, vector<int>& coordIndexOut);
 
 private:
-
+   bool _isValidFace(const int iF) const;
   vector<int>      _nPartsVertex; // if _nPartsVertex[iV]>1 => vertex is singular 
   vector<bool> _isBoundaryVertex;
+  Graph _dualGraph;
   
 };
 

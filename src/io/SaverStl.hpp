@@ -40,6 +40,8 @@
 #include <cstdio>
 #include "Saver.hpp"
 #include "wrl/IndexedFaceSet.hpp"
+#include <stdint.h>
+
 
 class SaverStl : public Saver {
 

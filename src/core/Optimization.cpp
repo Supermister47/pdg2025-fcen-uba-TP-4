@@ -88,6 +88,8 @@
 
 // #include <iostream>
 // #include <iomanip>
+#include <Eigen/Dense>
+#include <Eigen/Cholesky>
 #include <cmath>
 #include <cassert>
 #include "Optimization.hpp"
@@ -95,6 +97,8 @@
 // #include "Partition.hpp"
 #include "Heap.hpp"
 #include "wrl/IndexedFaceSetVariables.hpp"
+
+float eps = 1e-6f;
 
 //////////////////////////////////////////////////////////////////////
 Optimization::Optimization():
@@ -318,10 +322,10 @@ void Optimization::laplacianSmoothingVertexCoordinatesRun() {
   // Jacobi iteration for energy function
   // E(x) = \sum_{0<=iE<nE} {1} \| x_{iV0}-x_{iV1}^0\|^2
 
-  // std::cout << "void Optimization::laplacianSmoothingVertexCoordinatesRun() {\n";
-  // std::cout << "  lambda = " << _lambda << "\n";
-  // std::cout << "  mu     = " << _mu     << "\n";
-  // std::cout << "  steps  = " << _steps  << "\n";
+  std::cout << "void Optimization::laplacianSmoothingVertexCoordinatesRun() {\n";
+  std::cout << "  lambda = " << _lambda << "\n";
+  std::cout << "  mu     = " << _mu     << "\n";
+  std::cout << "  steps  = " << _steps  << "\n";
 
   IndexedFaceSetVariables ifsv(*_ifsOptimized);
   PolygonMesh* pmesh = ifsv.getPolygonMesh(true);
@@ -336,7 +340,48 @@ void Optimization::laplacianSmoothingVertexCoordinatesRun() {
   vector<float> wx(nV,0.0f);
 
   for(int step=0;step<_steps;step++) {
+    dx.assign(3*nV, 0.0f);
+    wx.assign(nV, 0.0f);
 
+    for (int iE=0; iE < nE; iE++) {
+      int iV0 = (pmesh->getVertex0(iE));
+      int iV1 = (pmesh->getVertex1(iE));
+
+      Vec3f V0 = Vec3f(x[iV0*3], x[iV0*3+1], x[iV0*3+2]);
+      Vec3f V1 = Vec3f(x[iV1*3], x[iV1*3+1], x[iV1*3+2]);
+      
+      // First I compute delta_v0
+      dx[iV0*3+0] += V1.x - V0.x;
+      dx[iV0*3+1] += V1.y - V0.y;
+      dx[iV0*3+2] += V1.z - V0.z;
+
+      // I save its weight
+      wx[iV0] += 1.0f;
+
+      // Then I compute delta_v1
+      dx[iV1*3+0] += V0.x - V1.x;
+      dx[iV1*3+1] += V0.y - V1.y;
+      dx[iV1*3+2] += V0.z - V1.z;
+
+      // I save its weight
+      wx[iV1] += 1.0f;
+    }
+    
+    // alternate between _lambda and _mu for even and odd step values
+    float lambda = (step%2==0)?_lambda:_mu;
+    
+    // Now I will normalize each displacement and then displace each vertex
+    for (int iV=0; iV < nV; iV++) {
+      if (abs(wx[iV]) > eps) {
+        dx[iV*3+0] /= wx[iV];
+        dx[iV*3+1] /= wx[iV];
+        dx[iV*3+2] /= wx[iV];
+      }
+
+      x[iV*3+0] += lambda * dx[iV*3+0];
+      x[iV*3+1] += lambda * dx[iV*3+1];
+      x[iV*3+2] += lambda * dx[iV*3+2];
+    }
     // zero accumulators dx[] and w[]
 
     // accumulate displacement vectors and weights
@@ -357,8 +402,6 @@ void Optimization::laplacianSmoothingVertexCoordinatesRun() {
     //   dx_iV /= wx_iV
     // }
 
-    // alternate between _lambda and _mu for even and odd step values
-    float lambda = (step%2==0)?_lambda:_mu;
 
     // apply displacement
     //
@@ -433,10 +476,55 @@ void Optimization::laplacianSmoothingFaceNormalsRun(const bool normalize) {
   // allocate local arrays to accumulate the normal displacements and weights
   vector<float> dn(3*nF,0.0f);
   vector<float> wn(nF,0.0f);
-
-  for(int step=0;step<_steps;step++) {
 
-    // zero accumulators dn[] and 
+  for(int step=0;step<_steps;step++) {
+      dn.assign(3*nF, 0.0f);
+      wn.assign(nF, 0.0f);
+      for (int iE=0; iE < nE; iE++) {
+          if (!pmesh->isRegularEdge(iE))
+              continue;
+          // I get both faces like this because I don't have access to the dual graph of the PolygonMesh
+          int iF0 = pmesh->getEdgeFace(iE, 0);
+          int iF1 = pmesh->getEdgeFace(iE, 1);
+
+          Vec3f F0 = Vec3f(n[iF0*3], n[iF0*3+1], n[iF0*3+2]);
+          Vec3f F1 = Vec3f(n[iF1*3], n[iF1*3+1], n[iF1*3+2]);
+
+          // First I compute delta_f0
+          dn[iF0*3+0] += F1.x - F0.x;
+          dn[iF0*3+1] += F1.y - F0.y;
+          dn[iF0*3+2] += F1.z - F0.z;
+
+          // I save its weight
+          wn[iF0] += 1.0f;
+
+          // Then I compute delta_f1
+          dn[iF1*3+0] += F0.x - F1.x;
+          dn[iF1*3+1] += F0.y - F1.y;
+          dn[iF1*3+2] += F0.z - F1.z;
+
+          // I save its weight
+          wn[iF1] += 1.0f;
+      }
+
+      // alternate between _lambda and _mu for even and odd step values
+      float lambda = (step%2==0)?_lambda:_mu;
+
+      // Now I will normalize each displacement and then displace each vertex
+      for (int iF=0; iF < nF; iF++) {
+          if (abs(wn[iF]) > eps) {
+              dn[iF*3+0] /= wn[iF];
+              dn[iF*3+1] /= wn[iF];
+              dn[iF*3+2] /= wn[iF];
+          }
+
+          n[iF*3+0] += lambda * dn[iF*3+0];
+          n[iF*3+1] += lambda * dn[iF*3+1];
+          n[iF*3+2] += lambda * dn[iF*3+2];
+      }
+
+
+    // zero accumulators dn[] and
 
     // accumulate displacement vectors
     //
@@ -458,7 +546,7 @@ void Optimization::laplacianSmoothingFaceNormalsRun(const bool normalize) {
     // }
 
     // alternate between _lambda and _mu for even and odd step values
-    float lambda = (step%2==0)?_lambda:_mu;
+
 
     // apply displacement
     //
@@ -469,7 +557,15 @@ void Optimization::laplacianSmoothingFaceNormalsRun(const bool normalize) {
   }
 
   if(normalize) {
-    // normalize face normals to unit length
+
+      for (int iN=0; iN < n.size(); iN+=3) {
+          float n_2 = sqrt(n[iN]*n[iN] + n[iN+1]*n[iN+1] + n[iN+2]*n[iN+2]);
+          if (n_2 < eps) n_2 = 1.0f; // to avoid divide by small numbers
+          n[iN+0] /= n_2;
+          n[iN+1] /= n_2;
+          n[iN+2] /= n_2;
+      }
+
   }
 
   // clear colors (or maybe not?)
@@ -502,9 +598,12 @@ void  Optimization::jacobiRun() {
   int nV = pmesh->getNumberOfVertices();
   int nE = pmesh->getNumberOfEdges();
 
-  // these are the target coordinates 
-  vector<float>& x0 = _ifsInput->getCoord();
-  
+  // these are the target coordinates
+  //vector<float>& x0 = _ifsInput->getCoord();
+  // Instead of copying from _ifsInput, which mday not be triangulated,
+  // I copy from _ifsOptimized before starting the iterations
+  vector<float> x0(_ifsOptimized->getCoord());  
+
   // this is the signal that we want to smooth over the primal graph
   vector<float>& x = _ifsOptimized->getCoord();
 
@@ -517,11 +616,9 @@ void  Optimization::jacobiRun() {
   // constraints this value to 0<=sigma<=1
   // note that if sigma==1.0f then this method produces the same result as
   // Optimization::laplacianSmoothingVertexCoordinatesRun() 
-  // and if sigma==0 the regularization term is ignored 
+  // and if sigma==0 the regularization term is ignored
 
-  for(int step=0;step<_steps;) {
-
-    // zero accumulators dx[] and wx[]
+  for(int step=0;step<_steps;step++) {
 
     // accumulate displacement vectors and weights
     //
@@ -535,6 +632,18 @@ void  Optimization::jacobiRun() {
     // 
     // }
 
+    float w = 1.0f - sigma;
+    dx.assign(3*nV, 0.0f);
+    wx.assign(nV, 0.0f);
+    for (int iV=0; iV < nV; iV++) {
+        dx[3*iV+0] += w*(-x[3*iV+0] + x0[3*iV+0]);
+        dx[3*iV+1] += w*(-x[3*iV+1] + x0[3*iV+1]);
+        dx[3*iV+2] += w*(-x[3*iV+2] + x0[3*iV+2]);
+
+
+        wx[iV] += w;
+    }
+
     // 2) accumulate the contribution of the regularization term
     //    - note that this part can be copied from
     //      Optimization::laplacianSmoothingVertexCoordinatesRun() 
@@ -547,22 +656,56 @@ void  Optimization::jacobiRun() {
     //   add -dx_iV0_iV1 multiplied by w to the accumulator dx_iV1
     //   add  w to the accumulator wx_iV1
     // }
+
+    w = sigma;
+    for (int iE=0; iE < nE; iE++) {
+      int iV0 = (pmesh->getVertex0(iE));
+      int iV1 = (pmesh->getVertex1(iE));
+
+      Vec3f V0 = Vec3f(x[iV0*3], x[iV0*3+1], x[iV0*3+2]);
+      Vec3f V1 = Vec3f(x[iV1*3], x[iV1*3+1], x[iV1*3+2]);
+      
+      // First I compute delta_v0
+      dx[iV0*3+0] += w*(V1.x - V0.x);
+      dx[iV0*3+1] += w*(V1.y - V0.y);
+      dx[iV0*3+2] += w*(V1.z - V0.z);
+
+      // I save its weight
+      wx[iV0] += w;
+
+      // Then I compue delta_v1
+      dx[iV1*3+0] += w*(V0.x - V1.x);
+      dx[iV1*3+1] += w*(V0.y - V1.y);
+      dx[iV1*3+2] += w*(V0.z - V1.z);
+
+      // I save its weight
+      wx[iV1] += w;
+    }
+
+
     //
     // normalize the displacement vectors
     // (make sure that you do not divide by zero!)
     //
     // for each vertex iV {
-    //   dx_iV /= wx_iV
+    //   dx_iV /= wx_iV          n[iN+0] /= n_2;
+
     // }
 
     // alternate between _lambda and _mu for even and odd step values
     float lambda = (step%2==0)?_lambda:_mu;
 
-    // apply displacement
-    //
-    // for each vertex iV {
-    //   x_iV += lambda * dx_iV
-    // }
+    for (int iV=0; iV < nV; iV++) {
+        if (abs(wx[iV]) > 0.0005) {
+            dx[iV*3+0] /= wx[iV];
+            dx[iV*3+1] /= wx[iV];
+            dx[iV*3+2] /= wx[iV];
+        }
+
+        x[iV*3+0] += lambda * dx[iV*3+0];
+        x[iV*3+1] += lambda * dx[iV*3+1];
+        x[iV*3+2] += lambda * dx[iV*3+2];
+    }
   }
 
   // since the vertex coordinates have changed, recompute face normals
@@ -626,10 +769,15 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
   PolygonMesh* pmesh = ifsv.getPolygonMesh(true);
 
   // get target vertex coordinates
-  vector<float>& coord0     = _ifsInput->getCoord();
+  //vector<float>& coord0     = _ifsInput->getCoord();
+  // Instead of copying from _ifsInput, which may not be triangulated,
+  // I copy from _ifsOptimized before starting the iterations
+  vector<float> coord0(_ifsOptimized->getCoord()); 
   
   // get output vertex coordinates
   vector<float>& coord      = _ifsOptimized->getCoord();
+
+  vector<int>& coordIndex = _ifsOptimized->getCoordIndex();
 
   // make sure that _ifsOptimized has normals per face not indexed
   if(_ifsOptimized->getNormalBinding()!=IndexedFaceSet::Binding::PB_PER_FACE) {
@@ -637,7 +785,6 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
     _ifsOptimized->clearNormal();
     // and recompute from the vertex coordinates
     _ifsOptimized->setNormalPerVertex(false);
-    vector<int>& coordIndex = _ifsOptimized->getCoordIndex();
     Geometry::computeNormalsPerFace(coord,coordIndex,_ifsOptimized->getNormal());
   }
   vector<float>& normal     = _ifsOptimized->getNormal();
@@ -720,9 +867,16 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
 
     if(sigmaData>0.0f) {
       for(iV=0;iV<nV;iV++) {
-        // ...
+        dx[3*iV+0] += sigmaData*(-x[3*iV+0] + x0[3*iV+0]);
+        dx[3*iV+1] += sigmaData*(-x[3*iV+1] + x0[3*iV+1]);
+        dx[3*iV+2] += sigmaData*(-x[3*iV+2] + x0[3*iV+2]);
+
+        W[6*iV+0] += sigmaData;
+        W[6*iV+2] += sigmaData;
+        W[6*iV+5] += sigmaData;
       }
     }
+    
 
     // accumulate contributions to displacement vectors from the second energy term
     //
@@ -732,11 +886,42 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
       // for each half edge iC (i.e., corner) ...
       for(iC=0;iC<nC;iC++) {
         // get the face index iF corresponding to the half edge iC
+        int iF = pmesh->getFace(iC);
+        if(iF<0) continue; // skip boundary half edges
+
         // get the two vertex indices iV0,iV1  corresponding to the half edge iC
+        int iV0 = coordIndex[iC];
+        int iV1 = coordIndex[pmesh->getDst(iC)];
+
         // compute the current displacement from iV0 to iV1
+        Vec3f V0 = Vec3f(x[iV0*3], x[iV0*3+1], x[iV0*3+2]);
+        Vec3f V1 = Vec3f(x[iV1*3], x[iV1*3+1], x[iV1*3+2]);
+
+
+        dx[iV0*3+0] += V1.x - V0.x;
+        dx[iV0*3+1] += V1.y - V0.y;
+        dx[iV0*3+2] += V1.z - V0.z;
+
+
         // retrieve the face normal corresponding to face iF
+        float nx = n[3*iF+0];
+        float ny = n[3*iF+1];
+        float nz = n[3*iF+2];
+
         // accumulate contributions to W matrix
+        W[6*iV0+0] += sigmaLink*nx*nx;
+        W[6*iV0+1] += sigmaLink*nx*ny;
+        W[6*iV0+2] += sigmaLink*ny*ny;
+        W[6*iV0+3] += sigmaLink*nx*nz;
+        W[6*iV0+4] += sigmaLink*ny*nz;
+        W[6*iV0+5] += sigmaLink*nz*nz;
+
         // accumulate contributions to displacement vectors
+        float dot = nx*(V1.x - V0.x) + ny*(V1.y - V0.y) + nz*(V1.z - V0.z);
+        dx[iV0*3+0] += sigmaLink*dot*nx;
+        dx[iV0*3+1] += sigmaLink*dot*ny;
+        dx[iV0*3+2] += sigmaLink*dot*nz;
+
       }
     }
 
@@ -748,9 +933,35 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
       // for each edge ...
       for(iE=0;iE<nE;iE++) {
         // get the two vertex indices iV0,iV1  corresponding to the edge iE
+        int iV0 = (pmesh->getVertex0(iE));
+        int iV1 = (pmesh->getVertex1(iE));
+
+        Vec3f V0 = Vec3f(x[iV0*3], x[iV0*3+1], x[iV0*3+2]);
+        Vec3f V1 = Vec3f(x[iV1*3], x[iV1*3+1], x[iV1*3+2]);
+        
         // compute the edge displacement vector from iV0 to iV1
-        // accumulate contributions to W matrix
         // accumulate contributions to displacement vectors
+
+        // First I compute delta_v0
+        dx[iV0*3+0] += sigmaSmoothing*(V1.x - V0.x);
+        dx[iV0*3+1] += sigmaSmoothing*(V1.y - V0.y);
+        dx[iV0*3+2] += sigmaSmoothing*(V1.z - V0.z);
+
+        // Then I compute delta_v1
+        dx[iV1*3+0] += sigmaSmoothing*(V0.x - V1.x);
+        dx[iV1*3+1] += sigmaSmoothing*(V0.y - V1.y);
+        dx[iV1*3+2] += sigmaSmoothing*(V0.z - V1.z);
+
+
+        // accumulate contributions to W matrix
+        W[6*iV0+0] += sigmaSmoothing;
+        W[6*iV0+2] += sigmaSmoothing;
+        W[6*iV0+5] += sigmaSmoothing;
+
+        W[6*iV1+0] += sigmaSmoothing;
+        W[6*iV1+2] += sigmaSmoothing;
+        W[6*iV1+5] += sigmaSmoothing;
+
       }
     }
 
@@ -763,6 +974,12 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
       // [ W0 W1 W3 ]
       // [ W1 W2 W4 ]
       // [ W3 W4 W5 ]
+      W0 = W[6*iV+0];
+      W1 = W[6*iV+1];;
+      W2 = W[6*iV+2];
+      W3 = W[6*iV+3];
+      W4 = W[6*iV+4];
+      W5 = W[6*iV+5];
 
       // std::cout << "W["<<iV<<"] = [\n";
       // std::cout << " " << W0 << " " << W1 << " " << W3 << "\n";
@@ -785,6 +1002,12 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
       // L3*L0             = W3 => L3 = W3/L0;
       // L3*L1+L4*L2       = W4 => L4 = (W4-L3*L1)/L2;
       // L3*L3+L4*L4+L5*L5 = W5 => L5 = sqrt(W5-L3*L3-L4*L4);
+      L0 = sqrt(W0);
+      L1 = W1/L0;
+      L2 = sqrt(W2-L1*L1);
+      L3 = W3/L0;
+      L4 = (W4-L3*L1)/L2;
+      L5 = sqrt(W5-L3*L3-L4*L4);
 
       not_positive_definite = false;
       if(W0<=0.0f) {
@@ -828,13 +1051,20 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
         // u0 = ... ;
         // u1 = ... ;
         // u2 = ... ;
+        u0 = dx[3*iV  ];
+        u1 = dx[3*iV+1];;
+        u2 = dx[3*iV+2];
         
         // solve for v : u = L*v
         //
         // [ u0 ]   [ L0  0  0 ]   [ v0 ]
         // [ u1 ] = [ L1 L2  0 ] * [ v1 ]
         // [ u2 ]   [ L3 L4 L5 ]   [ v2 ]
-        //
+        
+        v0 =        u0 / L0;
+        v1 = (u1 - L1*v0) / L2;
+        v2 = (u2 - L3*v0 - L4*v1) / L5;
+
         // u0 = L0 * v0
         // u1 = L1 * v0 + L2 * v1
         // u2 = L3 * v0 + L4 * v1 + L5 * v2
@@ -844,12 +1074,16 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
         // [ v0 ]   [ L0 L1 L3 ]   [ u0 ]
         // [ v1 ] = [  0 L2 L4 ] * [ u1 ]
         // [ v2 ]   [  0  0 L5 ]   [ u2 ]
-        //
+
         // v0 = L0 * u0 + L1 * u1 + L3 * u2
         // v1 =           L2 * u1 + L4 * u2
         // v2 =                     L5 * u2
 
         // set displacement vector for vertex iV
+
+        dx[3*iV  ] = L0 * u0 + L1 * u1 + L3 * u2;
+        dx[3*iV+1] =          L2 * u1 + L4 * u2;
+        dx[3*iV+2] =                    L5 * u2;
       }
     }
 
@@ -870,8 +1104,7 @@ void  Optimization::integrateNormalsRun(const bool recomputeFaceNormals) {
       errV = std::sqrt(errV);
     }
 
-    // std::cout << std::setprecision(6)
-    //           << "    errV[" << step << "] = "<< errV <<"\n";
+    std::cout << "    errV[" << step << "] = "<< errV <<"\n";
 
     ++step;
   } //   for(int step=0;step<_steps;)
@@ -943,6 +1176,7 @@ void Optimization::_collapseEdgesSelect
 
   int   i,iV,iF,iE,iV0,iV1,iV2,iV3,nEF;
   int   iC,iC0,iC1,iC0n,iC0p,iC1n,iC1p;
+  int   iC00, iC01, iC02, iC10, iC11, iC12, iC_next, iC_otherEnd;
   float M[10];
 
   IndexedFaceSetVariables ifsv(*_ifsOptimized);
@@ -1047,12 +1281,25 @@ void Optimization::_collapseEdgesSelect
     // if(eLength>=_lowEdgeLength) break;
 
     // if edge is not regular, continue
+    if (!pmesh->isRegularEdge(iE)) {
+      continue;
+    }
 
     // if either one of the two vertices iV0 and iV1 of the edge iE
     // are marked as used, continue
 
+    int iV0 = pmesh->getVertex0(iE);
+    int iV1 = pmesh->getVertex1(iE);
+
+    if (usedVertex[iV0] || usedVertex[iV1]) {
+      continue;
+    }
+
     // mark the edge as selected 
     edgeSelection[iE] = _eSelIndex;
+
+    // Get coordIndex
+    vector<int>& coordIndex = _ifsOptimized->getCoordIndex();
 
     // mark the two vertices, and depending on the value of indepSet,
     // some neighboring vertices as used
@@ -1070,11 +1317,97 @@ void Optimization::_collapseEdgesSelect
     // mark the x vertices as used
     switch(indepSet) {
     case EdgeCollapseIndependentSet::VERTICES_8:
+      //   iV5   iV2   iV4
+      //    \     |    /
       //     x - x - x
       //      \ / \ /
       // iV0-> x - x <- iV1
       //      / \ / \
       //     x - x - x
+      //    /    |    \
+      //  iV7   iV3   iV6
+      usedVertex[iV0] = true;
+      usedVertex[iV1] = true;
+
+      // get the vertex corresponding to the next corner in face
+      //          iV2
+      //        / iC02 \
+      //       /     ^  \
+      //      /       \  \
+      //     /         \  \      
+      //    /           \  \     
+      //   / iC00 --> iC01  \  
+      // iV0 -------------- iV1
+      //            
+      //          iV3
+      // It could be oriented in the other direction, but the logic is the same
+      
+      iC00 = pmesh->getEdgeHalfEdge(iE,0);
+      iC01 = pmesh->getNext(iC00);
+
+      iC02 = pmesh->getNext(iC01);
+      iV2 = coordIndex[iC02];
+
+      usedVertex[iV2] = true;
+
+      // get the vertex in the other face of the edge iE
+      iC10 = pmesh->getTwin(iC00);
+      iC11 = pmesh->getNext(iC10);
+
+      iC12 = pmesh->getNext(iC11);
+      iV3 = coordIndex[iC12];
+
+      usedVertex[iV3] = true;
+
+      // It doesn't matter if a half edge iC is oriented or not, because the mesh is triangulated
+      // so, if I take the twin of iC, I can get the previous half edge or the next half edge
+      // to obtain the corresponding vertex, because both ends of the half edges are the same vertex.
+
+      // I will assume that the edges are regular
+
+      // get iV4
+      iC = pmesh->getTwin(iC01);
+      iC_next = pmesh->getNext(iC);
+      iC_otherEnd = pmesh->getDst(iC_next);
+
+      iV = coordIndex[iC_otherEnd];
+      usedVertex[iV] = true;
+
+
+      // get iV5      
+      iC = pmesh->getTwin(iC02);
+      iC_next = pmesh->getNext(iC);
+      iC_otherEnd = pmesh->getDst(iC_next);
+
+      iV = coordIndex[iC_otherEnd];
+      usedVertex[iV] = true;
+
+
+      // get iV6 or iV7, depending of orientation
+      iC = pmesh->getTwin(iC00);
+      iC = pmesh->getNext(iC);
+      iC = pmesh->getTwin(iC);
+      iC_next = pmesh->getNext(iC);
+
+      iC_otherEnd = pmesh->getDst(iC_next);
+
+      iV = coordIndex[iC_otherEnd];
+      usedVertex[iV] = true;
+
+
+      // get the other vertex iV6 or iV7
+      iC = pmesh->getTwin(iC00);
+      iC = pmesh->getPrev(iC);
+      iC = pmesh->getTwin(iC);
+      iC_next = pmesh->getNext(iC);
+
+      iC_otherEnd = pmesh->getDst(iC_next);
+
+      iV = coordIndex[iC_otherEnd];
+      usedVertex[iV] = true;
+
+
+      
       break;
     case EdgeCollapseIndependentSet::VERTICES_4:
       //          x
@@ -1082,13 +1415,52 @@ void Optimization::_collapseEdgesSelect
       // iV0 -> x - x <- iV1
       //         \ /
       //          x
+
+      usedVertex[iV0] = true;
+      usedVertex[iV1] = true;
+
+      // get the vertex corresponding to the next corner in face
+      //          iV2
+      //        / iC02 \
+      //       /     ^  \
+      //      /       \  \
+      //     /         \  \      
+      //    /           \  \     
+      //   / iC00 --> iC01  \  
+      // iV0 -------------- iV1
+      //
+      //          iV3
+      // It could be oriented in the other direction, but the logic is the same
+
+
+      iC00 = pmesh->getEdgeHalfEdge(iE,0);
+      iC01 = pmesh->getNext(iC00);
+
+      iC02 = pmesh->getNext(iC01);
+      iV2 = coordIndex[iC02];
+
+      usedVertex[iV2] = true;
+
+      // get the vertex in the other face of the edge iE
+      iC10 = pmesh->getTwin(iC00);
+      iC11 = pmesh->getNext(iC10);
+
+      iC12 = pmesh->getNext(iC11);
+      iV3 = coordIndex[iC12];
+
+      usedVertex[iV3] = true;
+
       break;
+
     case EdgeCollapseIndependentSet::VERTICES_2:
       //          o
       //         / \
       // iV0 -> x - x <- iV1
       //         \ /
       //          o
+      usedVertex[iV0] = true;
+      usedVertex[iV1] = true;
+
       break;
     }
 
@@ -1147,18 +1519,26 @@ void Optimization::_initializeGarlandHeckbert() {
   for(iF=iC0=iC1=0;iC1<nC;iC1++) {
     if(coordIndex[iC1]>=0) continue;
     // get face iF normal vector
+    float a = normal[iF+0];
+    float b = normal[iF+1];
+    float c = normal[iF+2];
     // nf0 = normal[...];
     // nf1 = normal[...];
     // nf2 = normal[...];
 
     // get one vertex of the face, and its coordinates
     iV  = coordIndex[iC0];
+    float p0 = coord[iV+0];
+    float p1 = coord[iV+1];
+    float p2 = coord[iV+2];
     // p0  = coord[...];
     // p1  = coord[...];
     // p2  = coord[...];
 
     // compute the fourth df parameter of the implicit equation
     // f(p) = nf^t(p-p0) = nf^t p + (-nf^t p0) =  nf^t p + df
+    float df = (-a*p0) + (-b*p1) + (-c*p2);
+
 
     // build the face rank-1 4x4 matrix
     // [ M[0] M[1] M[3] M[6] ]
@@ -1166,7 +1546,22 @@ void Optimization::_initializeGarlandHeckbert() {
     // [ M[3] M[4] M[5] M[8] ]
     // [ M[6] M[7] M[8] M[9] ]
 
+    M[0] = a*a;
+    M[1] = a*b;
+    M[2] = b*b;
+    M[3] = a*c;
+    M[4] = b*c;
+    M[5] = c*c;
+    M[6] = a*df;
+    M[7] = b*df;
+    M[8] = c*df;
+    M[9] = df*df;
+
     // accumulate on qVMatrix4x4 for the face vertices
+
+    for (int i=0; i<10; i++) {
+      qVMatrix4x4->at(iV*10+i) += M[i];
+    }
 
     // look for next face
     iC0 = iC1+1; iF++;
@@ -1222,10 +1617,27 @@ float Optimization::_errorGarlandHeckbert
   //     [ l3 l4 l5 ]       [  0  0 l5 ]
   //
 
+  Eigen::MatrixXd A(3, 3);
+    A << a00, a10, a20,
+         a10, a11, a21,
+         a20, a21, a22;
+
+  Eigen::VectorXd b(3);
+    b << b0, b1, b2;
+  Eigen::LLT<Eigen::MatrixXd> llt(A);
+
+  // Get the lower triangular matrix L
+  Eigen::MatrixXd L = llt.matrixL();
+
   // solve A*x = L*(L^t*x) = -b;
 
+  // forward solve L y = -b
+  Eigen::VectorXd y = L.triangularView<Eigen::Lower>().solve(-b);
+  // backward solve L^T x = y
+  Eigen::VectorXd x_min2 = L.transpose().triangularView<Eigen::Upper>().solve(y);
+
   // compute edge error metric :
-  float err_iE = c + b0*x[0] + b1*x[1] + b2*x[2];
+  float err_iE = c + b0*x_min2[0] + b1*x_min2[1] + b2*x_min2[2];
   err_iE /= n_planes;
 
   return err_iE;
@@ -1289,45 +1701,106 @@ void Optimization::collapseEdgesApply
   //    }
   //    increment iVnew
   // }
-  //
-  // assign new vertex indices to vertices which are not ends of
-  // collapsed edges
-  //
-  // for each vertex iV {
-  //   if vertex iV is not end of a selected edge {
-  //      assign new index iVnew to iV
-  //      copy coord_iV onto newCoord_iVnew
-  //      if(errorMetric==EdgeCollapseErrorMetric::GARLAND_HECKBERT) {
-  //        use values stored in newQMatrix4x4 and _errorGarlandHeckbert()
-  //        to generate new matrix for the new vertex and to compute
-  //        coordinates of the new vertex
-  //      } else {
-  //        set coordinates of the new vertex as edge midpoint
-  //      }
-  //      increment iVnew
-  //   }
-  // }
+
+  int iVnew = 0;
+
+  for (int iE=0; iE < nE; iE++) {
+    if (edgeSelection[iE] == -1) {
+      continue;
+    }
+
+    int iV0 = pmesh->getVertex0(iE);
+    int iV1 = pmesh->getVertex1(iE);
+
+    vertexMap[iV0] = iVnew;
+    vertexMap[iV1] = iVnew;
+
+    Vec3f iV0_coord = Vec3f(coord[3*iV0+0], coord[3*iV0+1], coord[3*iV0+2]);
+    Vec3f iV1_coord = Vec3f(coord[3*iV1+0], coord[3*iV1+1], coord[3*iV1+2]);
+
+    float iVnew_coord_x = 0.5f * (iV0_coord.x + iV1_coord.x);
+    float iVnew_coord_y = 0.5f * (iV0_coord.y + iV1_coord.y);
+    float iVnew_coord_z = 0.5f * (iV0_coord.z + iV1_coord.z);
+    
+    newCoord.push_back(iVnew_coord_x);
+    newCoord.push_back(iVnew_coord_y);
+    newCoord.push_back(iVnew_coord_z);
+
+    if (errorMetric==EdgeCollapseErrorMetric::GARLAND_HECKBERT) {
+      for (int j=0; j<10; j++) {
+        newQMatrix4x4.push_back(qVMatrix4x4->at(10*iV0+j) + qVMatrix4x4->at(10*iV1+j));
+      }
+    }
+
+    iVnew++;
+  }
+
+
+  for (int iV=0; iV < nV; iV++) {
+    if (vertexMap[iV] != -1) {
+      // then, this vertex is one end of a selected edge
+      continue;
+    }
+
+    vertexMap[iV] = iVnew;
+    newCoord.push_back(coord[3*iV+0]);
+    newCoord.push_back(coord[3*iV+1]);
+    newCoord.push_back(coord[3*iV+2]);
+
+    if (errorMetric==EdgeCollapseErrorMetric::GARLAND_HECKBERT) {
+      // ????
+    }
+
+    iVnew++;
+  }
 
   // since faces incident to selected edges must be deleted, you may
   // want to create a data structure to identify them before the next
   // loop
 
+  vector<bool> faceDeleted(nF,false);
+  for (int iE=0; iE < nE; iE++) {
+    if (edgeSelection[iE] == -1) {
+      continue;
+    }
+
+    int nEF = pmesh->getNumberOfEdgeFaces(iE);
+    for (int i=0; i<nEF; i++) {
+      int iF = pmesh->getEdgeFace(iE,i);
+      faceDeleted[iF] = true;
+    }
+  }
+
   // create the new coordIndex array
   vector<int> newCoordIndex;
   // traverse the coordIndex array
-  int iF,iC0,iC1,iC;
+  int iF,iC0,iC1;
   for(iF=iC0=iC1=0;iC1<nC;iC1++) {
     if(coordIndex[iC1]>=0) continue;
     //
     // if face iF is incident to a selected edge, it has to be
     // deleted, continue
     //
+    if (faceDeleted[iF]) {
+      iC0 = iC1+1; iF++;
+      continue;
+    }
+
     // for each corner iC of face iF {
-    //   using the vertexMap array determine the new vertex index iVnew
-    //   push_back that value onto the new coordIndex array
-    // }
-    // don't forget to add a face separator
-    //
+      //   using the vertexMap array determine the new vertex index iVnew
+      //   push_back that value onto the new coordIndex array
+      // }
+      // don't forget to add a face separator
+
+      for (int iC=iC0; iC < iC1; iC++) {
+        int iV = coordIndex[iC];
+        int iV_new = vertexMap[iV];
+  
+        newCoordIndex.push_back(iV_new);
+      }
+  
+      newCoordIndex.push_back(-1);
+
     // advance to next face
     iC0 = iC1+1; iF++;
   }
@@ -1424,18 +1897,43 @@ void Optimization::_adaptiveSubdivisionSelect
 
   if(mode==SplitEdgesMode::ALL) {
 
-    // select al the vertices
+    // select all the vertices
+      vertexSelection.assign(nV, _vSelIndex);
 
   } else if(mode==SplitEdgesMode::SELECTED) {
 
     vector<int>& eSel = ifsv.getEdgeSelection();
     // select the vertices iV0 and iV1 of each selected edge (eSel[iE]!=-1)
 
+    for (int iE=0; iE < nE; iE++) {
+      if (eSel[iE] == -1) {
+        continue;
+      }
+
+      int iV0 = pmesh->getVertex0(iE);
+      int iV1 = pmesh->getVertex1(iE);
+
+      vertexSelection[iV0] = _vSelIndex;
+      vertexSelection[iV1] = _vSelIndex;
+    }
+
   } else if(mode==SplitEdgesMode::LONG) {
 
     // using the array _edgeLengths of pre-computed edge lengths
     // select all vertices of edges longer than highEdgeLength
     float highEdgeLength = _targetEdgeLength;
+
+    for (int iE=0; iE < nE; iE++) {
+      if (_edgeLengths[iE] <= highEdgeLength) {
+        continue;
+      }
+
+      int iV0 = pmesh->getVertex0(iE);
+      int iV1 = pmesh->getVertex1(iE);
+
+      vertexSelection[iV0] = _vSelIndex;
+      vertexSelection[iV1] = _vSelIndex;
+    }
   }
 
   // std::cout << "nVselected = " << nVselected << std::endl;
@@ -1465,7 +1963,11 @@ void Optimization::_adaptiveSubdivisionSelect
       //
       // count number of selected vertices of the triangle
       nVsel = 0;
-      // ...
+      for (int iC=iC0; iC < iC1; iC++) {
+          int iV = coordIndex[iC];
+          if (vertexSelection[iV] != -1)
+              nVsel++;
+      }
       // painT the face accordingly
       (*colorIndex)[iF] =
         (nVsel<=1)?noSplitColorIndex:
@@ -1527,41 +2029,173 @@ void Optimization::adaptiveSubdivisionApply
   // when you create new coordinates for a new vertices, you can just
   // push them back onto the original coord array.
 
+  int iVnew = nV;
+
   vector<int> edgeToNewVertex(nE,-1);
+  
   // for each edge iE {
   //   if either iV0 or iV1 is not selected, continue;
   //   create new vertex at edge midpoint and save them
   //   save the new vertex index into the edgeToNewVertex array
   // }
+  for (int iE=0; iE < nE; iE++) {
+    if (edgeSelection[iE] == -1) {
+      continue;
+    }
+
+    int iV0 = pmesh->getVertex0(iE);
+    int iV1 = pmesh->getVertex1(iE);
+
+    // create new vertex at edge midpoint
+    Vec3f iV0_coord = Vec3f(coord[3*iV0+0], coord[3*iV0+1], coord[3*iV0+2]);
+    Vec3f iV1_coord = Vec3f(coord[3*iV1+0], coord[3*iV1+1], coord[3*iV1+2]);
+
+    float iVnew_coord_x = 0.5f * (iV0_coord.x + iV1_coord.x);
+    float iVnew_coord_y = 0.5f * (iV0_coord.y + iV1_coord.y);
+    float iVnew_coord_z = 0.5f * (iV0_coord.z + iV1_coord.z);
+    
+    coord.push_back(iVnew_coord_x);
+    coord.push_back(iVnew_coord_y);
+    coord.push_back(iVnew_coord_z);
+
+    // save the new vertex index into the edgeToNewVertex array
+    edgeToNewVertex[iE] = iVnew;
+
+    iVnew++;
+  }
 
   // now split the triangles
-  // for each triangle iF connecting vertices iV0, iV1, and iV2 {
-  //   count the number of selected vertices nVsel=0,1,2,or 3
-  //   if nVsel==0 or nVsel==1 {
-  //     keep the triangle unchanged 
-  //   } else if nVsel==2 {
-  //     for example, if the selected vertices are iV1 and iV2
-  //     find the edge iE defined by iV1 and iV2
-  //     find the new vertex index iV12 associated with the edge 
-  //
-  //     split the input triangle into two output triangles
-  //
-  //           iV0
-  //        /   |    \
-  //       /    |     \
-  //     iV1 - iV12 - iV2
-  //
-  //   } else if nVsel==3 {
-  //
-  //     split into 3 triangles
-  //      
-  //           iV2
-  //         /      \
-  //       iV02 -- iV12
-  //       /  \    /   \
-  //     iV0 - iV01 - iV1
-  //   }
-  // }
+
+  int iF, iC0, iC1, nVsel;
+  int iFnew = nF;
+
+  for(iF=iC0=iC1=0;iC1<nC;iC1++) {
+      if(coordIndex[iC1]>=0) continue;
+
+      // Get nVsel
+      nVsel = 0;
+      for (int iC=iC0; iC < iC1; iC++) {
+          int iV = coordIndex[iC];
+          if (vertexSelection[iV] != -1) {
+              nVsel++;
+          }
+      }
+
+      // Classify triangle
+      if (nVsel == 0 || nVsel == 1);
+
+      else if (nVsel == 2) {
+          //     split the input triangle into two output triangles
+          //
+          //           iV0
+          //        /   |    \
+          //       /    |     \
+          //     iV1 - iV12 - iV2
+
+          // Search for the edge that has to be subdivided
+          for (int iC=iC0; iC < iC1; iC++) {
+              int iV1 = coordIndex[iC];
+              int iV2 = coordIndex[pmesh->getNext(iC)];
+
+              int iE = pmesh->getEdge(iV1, iV2);
+
+              // If the edge is the selected, then subdivide it
+              if (edgeSelection[iE] != -1) {
+                  // Compute the left triangle, overwriting the original triangle in coordIndex
+                  // so, iV12 should overwrite the position of iV2
+                  int iV12 = edgeToNewVertex[iE];
+                  coordIndex[pmesh->getNext(iC)] = iV12;
+
+                  // Compute the right triangle, creating a new face at the end of coordIndex;
+                  //
+                  coordIndex.push_back(iV2);
+                  // get iV0
+                  int iV0 = coordIndex[pmesh->getPrev(iC)];
+                  coordIndex.push_back(iV0);
+                  coordIndex.push_back(iV12);
+                  coordIndex.push_back(-1);
+
+                  // Assign color to new face
+                  int iF = pmesh->getFace(iC0);
+                  colorIndex.push_back(colorIndex[iF+0]);
+                  colorIndex.push_back(colorIndex[iF+1]);
+                  colorIndex.push_back(colorIndex[iF+2]);
+                  colorIndex.push_back(-1);
+                  break;
+              }
+          }
+      }
+      else if (nVsel == 3) {
+          //     split into 3 triangles
+          //
+          //           iV2
+          //         /      \
+          //       iV02 -- iV12
+          //       /  \    /   \
+          //     iV0 - iV01 - iV1
+          //
+
+          // First, I will obtain all vertices and then construct all the triangles
+
+          // get iV0, iV1 and iV2
+          int iV0 = coordIndex[iC0];
+          int iV1 = coordIndex[pmesh->getNext(iC0)];
+          int iV2 = coordIndex[pmesh->getPrev(iC0)];
+
+          assert(iV0 != iV1 && iV0 != iV2 && iV1 != iV2);
+
+
+          // get iV02
+          int iE02 = pmesh->getEdge(iV0, iV2);
+          int iV02 = edgeToNewVertex[iE02];
+
+          // get iV01
+          int iE01 = pmesh->getEdge(iV0, iV1);
+          int iV01 = edgeToNewVertex[iE01];
+
+          // get iV12
+          int iE12 = pmesh->getEdge(iV1, iV2);
+          int iV12 = edgeToNewVertex[iE12];
+
+
+          // I will overwrite the original triangle with the triangle iV2 -> iV12 -> iV02
+          coordIndex[iC0] = iV0;
+          coordIndex[iC0+1] = iV01;
+          coordIndex[iC0+2] = iV02;
+
+
+          // And now I will construct the remaining triangles at the end of the coordIndex, preserving the orientation
+          coordIndex.push_back(iV2);
+          coordIndex.push_back(iV02);
+          coordIndex.push_back(iV12);
+          coordIndex.push_back(-1);
+
+          coordIndex.push_back(iV01);
+          coordIndex.push_back(iV12);
+          coordIndex.push_back(iV02);
+          coordIndex.push_back(-1);
+
+          coordIndex.push_back(iV1);
+          coordIndex.push_back(iV12);
+          coordIndex.push_back(iV01);
+          coordIndex.push_back(-1);
+
+          // Color the new faces
+          for (int i=0; i<3; i++) {
+            colorIndex.push_back(colorIndex[iF]);
+            colorIndex.push_back(colorIndex[iF+1]);
+            colorIndex.push_back(colorIndex[iF+2]);
+          }
+
+      }
+      else {
+          cout << "!!!!!!!!!" << endl;
+      }
+
+      iC0=iC1+1; iF++;
+  }
+
+
 
   // clear all selection buffers
   ifsv.clearAllSelection();

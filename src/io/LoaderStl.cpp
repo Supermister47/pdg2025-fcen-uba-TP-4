@@ -163,7 +163,7 @@ bool LoaderStl::load(const char* filename, SceneGraph& wrl) {
       if(fread(&nTriangles,1,4,fp)<4)
         throw new StrException("unable to read number of triangles");
 
-      IndexedFaceSet* ifs = _initializeSceneGraph(wrl,filename);
+      IndexedFaceSet* ifs = _initializeSceneGraph(wrl,"SURFACE");
       // get references to the coordIndex, coord, and normal arrays
       vector<int>& coordIndex = ifs->getCoordIndex();
       vector<float>& coord    = ifs->getCoord();

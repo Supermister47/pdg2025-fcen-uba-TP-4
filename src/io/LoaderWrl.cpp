@@ -68,7 +68,7 @@ bool LoaderWrl::loadSceneGraph(Tokenizer& tkn, SceneGraph& wrl) {
       Shape* s = new Shape();
       wrl.addChild(s);
       loadShape(tkn,*s);
-      s->setName(name);
+      s->setName("SURFACE");
       name = "";
     } else if(tkn.equals("")) {
       break;
@@ -201,7 +201,7 @@ bool LoaderWrl::loadChildren(Tokenizer& tkn, Group& group) {
       Shape* s = new Shape();
       group.addChild(s);
       loadShape(tkn,*s);
-      s->setName(name);
+      s->setName("SURFACE");
       name = "";
     } else if(tkn.equals("]")) {
       success = true;

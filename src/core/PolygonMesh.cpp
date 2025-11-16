@@ -38,30 +38,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 // DAMAGE.
-
+
 #include <iostream>
 #include "PolygonMesh.hpp"
 #include "Partition.hpp"
+#include "Graph.hpp"
 
 // TODO Mon Mar 6 2023
 // - merge your code from Assignment 2
 
-PolygonMesh::PolygonMesh(const int nVertices, const vector<int>& coordIndex):
-  HalfEdges(nVertices,coordIndex),
-  _nPartsVertex(),
-  _isBoundaryVertex()
-{
+PolygonMesh::PolygonMesh(const int nVertices, const vector<int>& coordIndex) : HalfEdges(nVertices, coordIndex),
+_nPartsVertex(),
+_isBoundaryVertex(),
+_dualGraph(getNumberOfFaces()) {
   int nV = getNumberOfVertices();
   int nE = getNumberOfEdges(); // Edges method
-  // int nF = getNumberOfFaces();
   int nC = getNumberOfCorners();
 
   // 1) classify the vertices as boundary or internal
-  for(int iV=0;iV<nV;iV++)
-    _isBoundaryVertex.push_back(false);
-  // TODO
-  // - for edge boundary iE label its two end vertices as boundary 
-  
+  _createIsBoundaryVertex(nV, nE);
   // 2) create a partition of the corners in the stack
   Partition partition(nC);
   // 3) for each regular edge
@@ -69,6 +64,32 @@ PolygonMesh::PolygonMesh(const int nVertices, const vector<int>& coordIndex):
   //    - join the two pairs of corresponding corners accross the edge
   //    - you need to take into account the relative orientation of
   //      the two incident half edges
+  for (int iE = 0; iE < nE; iE++) {
+    int nFaces = getNumberOfEdgeHalfEdges(iE);
+
+    // If there is exactly two faces incident to the edge
+    // then the edge is regular and we can join the corners
+    // accross the edge
+    if (nFaces == 2) {
+
+      int iC00 = getEdgeHalfEdge(iE, 0);
+      int iC01 = getDst(iC00);
+
+      int iC10 = getEdgeHalfEdge(iE, 1);
+      int iC11 = getDst(iC10);
+
+      if (HalfEdges::isOriented(iC00)) {
+        // Consistently oriented
+        partition.join(iC00, iC11);
+        partition.join(iC01, iC10);
+      }
+      else {
+        // Oposite orientation
+        partition.join(iC00, iC10);
+        partition.join(iC01, iC11);
+      }
+    }
+  }
 
   // consistently oriented
   /* \                  / */
@@ -93,19 +114,77 @@ PolygonMesh::PolygonMesh(const int nVertices, const vector<int>& coordIndex):
   // note that the partition will end up with the corner separators as
   // singletons, but it doesn't matter for the last step, and
   // the partition will be deleteted upon return
-  
+
   // 4) count number of parts per vertex
   //    - initialize _nPartsVertex array to 0's
-  //    - for each corner iC which is a representative of its subset, 
+  //    - for each corner iC which is a representative of its subset,
   //    - get the corresponding vertex index iV and increment _nPartsVertex[iV]
   //    - note that all the corners in each subset share a common
   //      vertex index, but multiple subsets may correspond to the
   //      same vertex index, indicating that the vertex is singular
+
+  _create_nPartsVertex(nVertices, nC, partition);
+
+  // Create the dual graph
+
+  _createDualGraph();
 }
-
+
+void PolygonMesh::_createIsBoundaryVertex(int nV, int nE) {
+  _isBoundaryVertex.resize(nV, false);
+
+  // - for edge boundary iE label its two end vertices as boundary
+  for (int iE = 0; iE < nE; iE++) {
+    int nFaces = getNumberOfEdgeHalfEdges(iE);
+
+    // If there is at least one edge that is regular or singular
+    // then both vertices of the edge can not be boundary
+    if (nFaces == 1) {
+      _isBoundaryVertex[getVertex0(iE)] = true;
+      _isBoundaryVertex[getVertex1(iE)] = true;
+    }
+  }
+}
+
+void PolygonMesh::_create_nPartsVertex(const int nVertices, int nC, Partition& partition) {
+  _nPartsVertex.resize(nVertices, 0);
+
+  for (int iC = 0; iC < nC; iC++) {
+    if (partition.find(iC) == iC) {
+      int iV = _coordIndex[iC];
+
+      if (iV == -1)
+        continue; // skip face separators
+
+      _nPartsVertex[iV]++;
+    }
+  }
+}
+
+void PolygonMesh::_createDualGraph() {
+  for (int iE = 0; iE < getNumberOfEdges(); iE++) {
+    int nFaces = getNumberOfEdgeFaces(iE);
+
+    // For each face adjacent to edge iE
+    for (int j0 = 0; j0 < nFaces; j0++) {
+      int iF0 = getEdgeFace(iE, j0);
+
+      // Connect it to the others faces that are adjacent to edge iE
+      for (int j1 = j0 + 1; j1 < nFaces; j1++) {
+        int iF1 = getEdgeFace(iE, j1);
+        _dualGraph.insertEdge(iF0, iF1);
+      }
+
+    }
+  }
+}
+
+bool PolygonMesh::_isValidFace(const int iF) const {
+  return 0 <= iF && iF < getNumberOfFaces();
+}
+
 int PolygonMesh::getNumberOfFaces() const {
-  // TODO
-  return 0;
+  return _nF;
 }
 
 int PolygonMesh::getNumberOfEdgeFaces(const int iE) const {
@@ -113,39 +192,73 @@ int PolygonMesh::getNumberOfEdgeFaces(const int iE) const {
 }
 
 int PolygonMesh::getEdgeFace(const int iE, const int j) const {
-  // TODO
-  return -1;
+  if (!(_isValidEdge(iE) && 0 <= j && j < getNumberOfEdgeFaces(iE))) {
+    return -1;
+  }
+
+  int iHE = getEdgeHalfEdge(iE, j);
+  return getFace(iHE);
 }
 
 bool PolygonMesh::isEdgeFace(const int iE, const int iF) const {
-  // TODO
-  return false;
+  if (!(_isValidEdge(iE) && _isValidFace(iF))) {
+    return false;
+  }
+
+  int j = 0;
+  bool res = false;
+  int iF_j = getEdgeFace(iE, j);
+  while (iF_j != -1) {
+    res |= iF_j == iF;
+    j++;
+    iF_j = getEdgeFace(iE, j);
+  }
+  return res;
 }
+
+
 
 // classification of vertices
 
 bool PolygonMesh::isBoundaryVertex(const int iV) const {
   int nV = getNumberOfVertices();
-  return (0<=iV && iV<nV)?_isBoundaryVertex[iV]:false;
+  return (0 <= iV && iV < nV) ? _isBoundaryVertex[iV] : false;
 }
 
 bool PolygonMesh::isSingularVertex(const int iV) const {
   int nV = getNumberOfVertices();
-  return (0<=iV && iV<nV && _nPartsVertex.size()>0 && _nPartsVertex[iV]>1);
+  return (0 <= iV && iV < nV && _nPartsVertex[iV] > 1);
 }
 
 // properties of the whole mesh
 
 bool PolygonMesh::isRegular() const {
-  // TODO
-  return false;
+  int nV = getNumberOfVertices();
+  int nE = getNumberOfEdges();
+
+  bool res = true;
+
+  for (int iE = 0; iE < nE; iE++) {
+    res &= !isSingularEdge(iE);
+  }
+
+  for (int iV = 0; iV < nV; iV++) {
+    res &= !isSingularVertex(iV);
+  }
+  return res;
 }
 
 bool PolygonMesh::hasBoundary() const {
-  // TODO
-  return false;
+  int nE = getNumberOfEdges();
+  bool res = false;
+
+  for (int iE = 0; iE < nE; iE++) {
+    res |= isBoundaryEdge(iE);
+  }
+
+  return res;
 }
-
+
 //////////////////////////////////////////////////////////////////////
 // CONNECTED COMPONENTS
 
@@ -155,28 +268,46 @@ bool PolygonMesh::hasBoundary() const {
 // - for each face; 0<=iCC<nCC
 int PolygonMesh::computeConnectedComponentsPrimal(vector<int>& faceLabel) const {
   int nCCprimal = 0;
+  vector<int> vToCC(getNumberOfVertices(), -1);
   faceLabel.clear();
+  faceLabel.resize(getNumberOfFaces(), -1);
 
-  // HINTS :
-  //
-  // - use the edges of the primal graph to compute a partition of the
-  //   vertices
-  //
-  // - nCC is equal to the final number of parts in the partition
-  //
-  // - since all the vertices of each face must belong to the the same
-  //   part, there is no ambiguity in assigning connected component
-  //   numbers to the faces
-  //
-  // - to assign component numbers to the parts in the range 0<=iCC<nCC 
-  //   you can use an array vToCC of size nV initialized to -1's
-  //
-  // - first, assign component numbers to the vertices which are
-  //   representative of the parts
-  // - second, assign component numbers to all the other vertices
-  // - finally, fill the faceLabel array using the component number
-  //   associated with the first vertex of each face
-  
+  // Create a partition of the vertices using the edges of the primal graph
+  Partition partition(getNumberOfVertices());
+
+  for (int iE = 0; iE < getNumberOfEdges(); iE++) {
+    int iV0 = getVertex0(iE);
+    int iV1 = getVertex1(iE);
+    partition.join(iV0, iV1);
+  }
+
+  // Fulfill vToCC
+
+  for (int iV = 0; iV < getNumberOfVertices(); iV++) {
+    // Get the vertex representative of the partition
+    int root = partition.find(iV);
+    // Assign a connected component number to the representative
+    // if it doesn't have one already
+    if (vToCC[root] == -1) {
+      vToCC[root] = nCCprimal;
+      nCCprimal++;
+    }
+
+    // Assign the cc number of the representative root corner
+    // to the vertex
+    vToCC[iV] = vToCC[root];
+  }
+
+  // Fulfill faceLabel
+  for (int iC = 0; iC < getNumberOfCorners(); iC++) {
+    if (_isValidCorner(iC)) {
+      int iF = getFace(iC);
+      int iV = _coordIndex[iC];
+      faceLabel[iF] = vToCC[iV];
+    }
+  }
+
+
   return nCCprimal;
 }
 
@@ -186,29 +317,44 @@ int PolygonMesh::computeConnectedComponentsPrimal(vector<int>& faceLabel) const 
 // - for each face; 0<=iCC<nCC
 int PolygonMesh::computeConnectedComponentsDual(vector<int>& faceLabel) const {
   int nCCdual = 0;
+  vector<int> vToCC(getNumberOfFaces(), -1);
   faceLabel.clear();
+  faceLabel.resize(getNumberOfFaces(), -1);
 
-  int iF,iFt,iFR,iC0,iC1,iC,iCt,iP;
 
-  // HINTS :
-  //
-  // - use the edges of the dual graph to compute a partition of the
-  //   vertices
-  //
-  // - you can generate the dual graph explicitly, or just traverse
-  //   the half edges looking for regular edges
-  //
-  // - nCC is equal to the final number of parts in the partition
-  //
-  // - component number assignment is similar to the primal case, but
-  //   easier here, since there is no need to transfer from vertices
-  //   to faces
-  
+
+  // Create a partition of the vertices using the edges of the dual graph
+  Partition partition(getNumberOfFaces());
+
+  // Vertices of the dual graph are faces of the primal graph
+  for (int iE = 0; iE < _dualGraph.getNumberOfEdges(); iE++) {
+    int iV0 = _dualGraph.getVertex0(iE);
+    int iV1 = _dualGraph.getVertex1(iE);
+    partition.join(iV0, iV1);
+  }
+
+  // Fulfill vToCC
+  for (int iF = 0; iF < getNumberOfFaces(); iF++) {
+    // Get the vertex representative of the partition
+    int root = partition.find(iF);
+    // Assign a connected component number to the representative
+    // if it doesn't have one already
+    if (faceLabel[root] == -1) {
+      faceLabel[root] = nCCdual;
+      nCCdual++;
+    }
+
+    // Assign the connected component number of the representative root corner
+    // to the face
+    faceLabel[iF] = faceLabel[root];
+  }
+
+
   return nCCdual;
 }
-
+
 // ORIENTATION
-  
+
 // determines if the mesh is oriented
 // - a mesh is oriented if all regular edges are consistently oriented
 // - by definition, a mesh with singular edges is not oriented
@@ -216,19 +362,182 @@ int PolygonMesh::computeConnectedComponentsDual(vector<int>& faceLabel) const {
 //   definition (since cuting through them does not affect
 //   orientation)
 bool PolygonMesh::isOriented() const {
-  if(hasSingularEdges()) return false;
+  // If there are singular edges, the mesh is not oriented
+  if (hasSingularEdges()) return false;
 
-  // HINTS :
-  //
-  // - traverse the list of half edges, and check whether or not the
-  //   regualr edges are consistently oriented
-  // - as soon as you find one edge which is not consistently oriented
-  //   you can reurn false
-  // - if no inconsistently oriented edge is found, return true
+  // Check all regular edges for consistent orientation
+  for (int iE = 0; iE < getNumberOfEdges(); iE++) {
+
+    if (isRegularEdge(iE)) {
+      int iC0 = getEdgeHalfEdge(iE, 0);
+
+      // If one regular edge is not consistently oriented,
+      // then the mesh is not oriented
+      if (HalfEdges::isOriented(iC0) == false) {
+        return false;
+      }
+    }
+  }
 
   return true;
 }
-
+
+bool PolygonMesh::_isOrientableInvertingFaces(vector<bool>& invertFace) const {
+  if (hasSingularEdges()) return false;
+  if (isOriented()) return true;
+  // The mesh is not oriented but only has regular and boundary edges
+
+
+  int nC = getNumberOfCorners();
+  int nF = getNumberOfFaces();
+  vector<bool> faceWasVisited(nF, false);
+
+  invertFace.clear();
+  invertFace.resize(nF, false);
+
+  vector<int> cornerStack;
+  int iC0 = 0;
+  int faceRoot = _face[iC0];
+  int nVisitedFaces = 0;
+
+  // I don't know if this is the most efficient way to to get the
+  // first corner of any face
+  Faces faces(getNumberOfVertices(), _coordIndex);
+
+
+  while (nVisitedFaces < nF) {
+
+    // Find the next unvisited face
+    // If there is one single connected component, this will
+    // be executed only once, using the first face as root
+    while (faceWasVisited[faceRoot]) {
+      faceRoot++;
+    }
+
+    // Mark the root face as visited
+    faceWasVisited[faceRoot] = true;
+    nVisitedFaces++;
+
+    int iC_j = faces.getFaceFirstCorner(faceRoot);
+
+    // Traverse all the corners and add them to the stack if they are regular half edges
+    _addAllHalfEdgesTo(iC_j, cornerStack);
+
+    // Check all half edges in the stack of the current connected component
+    while (!cornerStack.empty()) {
+      int iC = cornerStack.back();
+      cornerStack.pop_back();
+      int iF = getFace(iC);
+      int iC_twin = getTwin(iC);
+      int iF_twin = getFace(iC_twin);
+
+
+      if (HalfEdges::isOriented(iC)) {
+        // If the half edge is properly oriented, then it depends on whether the current face iF
+        // has to be inverted or not
+        if (invertFace[iF]) {
+          // I should invert the twin face if it is not oriented already
+          if (faceWasVisited[iF_twin] && invertFace[iF_twin]) {
+            // If the face was visited and has to be inverted, then it's okey
+          }
+
+          if (faceWasVisited[iF_twin] && !invertFace[iF_twin]) {
+            // Otherwise, the mesh is not orientable
+            return false;
+          }
+
+          else {
+            // Otherwise, the twin face has to be inverted
+            faceWasVisited[iF_twin] = true;
+            nVisitedFaces++;
+            invertFace[iF_twin] = true;
+
+            _addAllHalfEdgesTo(iC_twin, cornerStack);
+          }
+        }
+        else {
+          // If the current face iF should not be inverted, then the twin face should not be inverted
+          if (faceWasVisited[iF_twin]) {
+            if (invertFace[iF_twin]) {
+              // If it was visited and has to be inverted, then the mesh is not orientable
+              return false;
+            }
+            // Otherwise, it's okey
+          }
+
+          else {
+            // Otherwise, the twin face should not be inverted
+            faceWasVisited[iF_twin] = true;
+            nVisitedFaces++;
+            invertFace[iF_twin] = false;
+
+            _addAllHalfEdgesTo(iC_twin, cornerStack);
+          }
+        }
+      }
+
+      else {
+        // If the half edge is not properly oriented, then it depends on whether the current face iF
+        // has to be inverted or not
+        if (invertFace[iF]) {
+          // then, the twin face should not be inverted
+          if (faceWasVisited[iF_twin]) {
+            // If it was visited and has to be inverted, then the mesh is not orientable
+            if (invertFace[iF_twin]) {
+              return false;
+            }
+            // If it wasn't inverted, then it's okey
+          }
+
+          // Otherwise, the twin face should not be inverted
+          else {
+            faceWasVisited[iF_twin] = true;
+            nVisitedFaces++;
+            invertFace[iF_twin] = false;  // Just to be explicit
+
+            _addAllHalfEdgesTo(iC_twin, cornerStack);
+          }
+        }
+
+        // If the current face iF is not inverted, then the other face should be inverted
+        else {
+          if (faceWasVisited[iF_twin]) {
+            // If it was visited and has to be inverted, then it's okey
+            if (invertFace[iF_twin]) {
+              // it's okey
+            }
+            // Otherwise, the mesh is not orientable
+            else {
+              return false;
+            }
+          }
+
+          // Otherwise, the twin face should be inverted
+          else {
+            faceWasVisited[iF_twin] = true;
+            nVisitedFaces++;
+            invertFace[iF_twin] = true;
+
+            _addAllHalfEdgesTo(iC_twin, cornerStack);
+          }
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+// Auxiliary method to add all half edges of a face to the corner stack
+void PolygonMesh::_addAllHalfEdgesTo(int& iC_j, std::vector<int>& cornerStack) const {
+  for (int j = 0; j < getFaceSize(iC_j) - 1; j++) {
+    iC_j = getDst(iC_j);
+    if (getTwin(iC_j) != -1) {
+      cornerStack.push_back(iC_j);
+    }
+  }
+}
+
 // determines if the mesh is orientable
 // - a mesh is orientable if a choice of orientation can be made for
 //   each face so that, after the face orientation changes are made,
@@ -238,50 +547,12 @@ bool PolygonMesh::isOriented() const {
 //   definition (since cuting through them does not affect
 //   orientation)
 bool PolygonMesh::isOrientable() const {
-  if(hasSingularEdges()) return false;
-  if(isOriented()) return true;
-  // here the mesh is not oriented but only has regular and boundary edges
 
-  // you need to implement a mesh traversal algorithm using these variables
+  vector<bool> invertFace;
 
-  int nC = getNumberOfCorners();
-  int nF = getNumberOfFaces();
-  vector<bool> face_was_visited(nF,false);
-  vector<bool> invert_face(nF,false);
-  vector<int> face_root;
-  vector<int> corner_stack;
-
-  // pseudo-code
-  //
-  // while (not all the faces have been visited) {
-  //  - select a root face iF_root
-  //  - set the face as visited, and preserve its original orientation  
-  //    push all the half edge indices of the face onto the corner_stack
-  //  while ( the corner_stack is not empty) {
-  //   - pop a half edge index iC until you find one which has a twin
-  //     iCt contained in a face iFt; let iF be the face containing iC
-  //   - determine whether or not iFt should be inverted if the edge
-  //     is crossed to make the two half edges consistently oriented
-  //   if (the face iFt had been visited before) {
-  //     if ( the computed expected orientation is different from the
-  //          one assigned on the first visit) {
-  //       - we have found a loop in the dual graph which cannot be
-  //         oriented; as a result, the mesh is not oriented
-  //       - return false;
-  //      }
-  //    } else if (the face iFt had not been visited before) {
-  //      - save the computed expected orientation in the invert_face array
-  //      - push all the remaining half edges of the face iFt onto the corner_stack
-  //    }
-  //   - this is the end of the connected component in the dual graph
-  //     containing iF_root
-  //   - if not all the faces have been visited, we can repeat until
-  //     all the connected components are accounted for }
-  //  }
-
-  return true;
+  return _isOrientableInvertingFaces(invertFace);
 }
-
+
 // orient
 // - implementation requires a dual graph traversal algorithm
 // - the number of connected components nCC of the dual graph are
@@ -297,54 +568,64 @@ bool PolygonMesh::isOrientable() const {
 // - returns the number of connected components nCC if successful,
 //   and 0 if the mesh is not orientable
 // - if not successful, the output arrays should be empty as well
-int PolygonMesh::orient(vector<int>& ccIndex, vector<bool>& invert_face) {
-  int nCC = 0;
+int PolygonMesh::orient(vector<int>& ccIndex, vector<bool>& invertFace) {
   ccIndex.clear();
-  invert_face.clear();
-  if(hasSingularEdges()) return 0;
-  // if(isOriented()) return true;
-  // mesh is not oriented but only has regular and boundary edges
+
+  int nCC = computeConnectedComponentsDual(ccIndex);
   int nC = getNumberOfCorners();
   int nF = getNumberOfFaces();
-  vector<bool> face_was_visited(nF,false);
-  vector<int>& face_root = ccIndex;
-  vector<int> corner_stack;
 
-  // HINTS :
-  //
-  // - a minor variation of isOrientable()
-  // - note that you cannot return right away if isOriented()==true
-  //   since we need to partition the faces into connected components,
-  //   and fill the ccIndex and invert_face array
+  invertFace.clear();
+  invertFace.resize(nF, false);
+  // If there are singular edges, the mesh is not orientable
+  if (hasSingularEdges()) return 0;
+  // If the mesh is already oriented, nothing to do
+  if (isOriented()) return true;
+
+  _isOrientableInvertingFaces(invertFace);
+
+  // Invert invertFace, I do this because this orientation works better for the
+  // he-test-xx.wrl models provided
+  for (int i = 0; i < invertFace.size(); i++) {
+    invertFace[i] = !invertFace[i];
+  }
+
 
   return nCC;
 }
-
+
 //////////////////////////////////////////////////////////////////////
 // MANIFOLD
 
 // determine how many isolated vertices the mesh has
 int PolygonMesh::numberOfIsolatedVertices() {
-  int nV_isolated = 0;
+  vector<int> isolated_vertex;
+  getIsolatedVertices(isolated_vertex);
+  int nVIsolated = static_cast<int>(isolated_vertex.size());
 
-  // HINTS :
-  //
-  // - isolated vertices are those not contained in the coordIndex array
-  // - it is sufficient to count how many faces are incident to each vertex 
 
-  return nV_isolated;
+  return nVIsolated;
 }
 
 // get array of isolated vertex indices
 void PolygonMesh::getIsolatedVertices(vector<int>& isolated_vertex) {
   isolated_vertex.clear();
 
-  // HINTS :
-  //
-  // - same as the previous method, but returning the indices of the
-  //   isolated vertices in an array
+  int nV = getNumberOfVertices();
+
+  for (int iV = 0; iV < nV; iV++) {
+
+    // Even if this structure tells which vertices are singular, it can be
+    // used to know which vertices are isolated too, since isolated vertices
+    // have 0 parts
+    if (_nPartsVertex[iV] == 0) {
+      isolated_vertex.push_back(iV);
+    }
+  }
 
 }
+
+
 
 // remove isolated vertices
 // - the new number of vertices nVout should be <= that the original
@@ -365,18 +646,60 @@ bool PolygonMesh::removeIsolatedVertices
   coordMap.clear();
   coordIndexOut.clear();
 
-  // HINTS :
-  //
-  // - determine which vertices are not isolated, and fill the coordMap
-  //   array with them
-  // - build another array of size nV, initialized to -1's
-  //   where you store the location of each non-isolated vertex in the
-  //   coordMap array
-  // - use this array to fill the coordIndexOut array from coordIndex
+  int nV = getNumberOfVertices();
+
+  vector<int> isolatedVertices;
+  getIsolatedVertices(isolatedVertices);
+
+  // If there are no isolated vertices, nothing to do
+  if (isolatedVertices.empty()) {
+    return false;
+  }
+
+  int nVOut = nV - isolatedVertices.size();
+  int iVCoordIndex = 0;
+  int iVIsolated = 0;
+  coordMap.resize(nVOut, -1);
+  // Build coordMap
+  for (int iV = 0; iV < nV; iV++) {
+    // Skip isolated vertices
+    if (iV == isolatedVertices[iVIsolated]) {
+      iVIsolated++;
+      continue;
+    }
+    else {
+      coordMap[iVCoordIndex] = iV;
+      iVCoordIndex++;
+    }
+  }
+
+  // Build an array to map old vertex indices to new vertex indices
+  vector<int> oldToNewVertexMap(nV, -1);
+
+  // Fill oldToNewVertexMap
+  for (int iVOut = 0; iVOut < nVOut; iVOut++) {
+    int iV = coordMap[iVOut];
+    oldToNewVertexMap[iV] = iVOut;
+  }
+
+  // Build coordIndexOut
+  int nC = getNumberOfCorners();
+  coordIndexOut.resize(nC, -1);
+  for (int iC = 0; iC < nC; iC++) {
+    int iV = _coordIndex[iC];
+    if (iV == -1) {
+      // Assign face separators the same as input
+      coordIndexOut[iC] = -1;
+    }
+    else {
+      coordIndexOut[iC] = oldToNewVertexMap[iV];
+    }
+  }
 
   return true;
 }
-
+
+
 // cut through singular vertices
 // - should only cut through singular vertices which belong to
 //   different connected components of the dual graph
@@ -399,39 +722,150 @@ void PolygonMesh::cutThroughSingularVertices
   vIndexMap.clear();
   coordIndexOut.clear();
 
-  // HINTS :
-  //
-  // - construct a partition of the corners by joining pairs of
-  //   matching corners across regular and singular edges
-  //
-  // - this can be done remembering the first half edge associated to
-  //   each edge in an array; no join operations are performed on the
-  //   first half edge visit to the edge
-  //
-  // - when a subsequent half edge is associated with an edge which
-  //   has a valid first half edge corner assigned, the new half edge
-  //   and the first half edge of the edge result into two join operations
-  //
-  // - since the partition still contains the face separators as
-  //   singletons, the number of output vertices is equal to the
-  //   number of parts minus the number of faces
-  //
-  // - if the number of output vertices is equal to the number of
-  //   input vertices, there is no more work to do
-  //
-  // - initialize the output coordIndex array with nC -1's
-  //
-  // - first pass through the coordIndex array
-  //    - fill the vIndexMap array
-  //    - fill the coordIndexOut array for root corner indices of the
-  //      partition
-  //
-  // - second pass through the coordIndex array
-  //    - fill the coordIndexOut array for non-root corner indices of
-  //      the partition
+  vector<int> coordMap;
+  vector<int> coordIndexRemovingIsolatedVertices;
+  bool removedIsolatedVertices = removeIsolatedVertices(coordMap, coordIndexRemovingIsolatedVertices);
+
+  // If we did not remove isolated vertices, we need to create an identity coordMap
+  if (!removedIsolatedVertices) {
+    coordIndexRemovingIsolatedVertices = _coordIndex;
+
+    // Make coordMap identity
+    int nV = getNumberOfVertices();
+    coordMap.resize(nV, -1);
+    for (int iV = 0; iV < nV; iV++) {
+      coordMap[iV] = iV;
+    }
+  }
+
+  int nV = getNumberOfVertices();
+  int nVOut = nV;
+  int nC = coordIndexRemovingIsolatedVertices.size();
+
+  coordIndexOut.resize(nC, -1);
+
+
+  Partition partitionRegularSingular(nC);
+
+  // Build a partition of the corners by joining pairs of
+  // matching corners across regular and singular edges
+  // Even if we removed isolated vertices, the number of edges is still the same
+  // so we can use getNumberOfEdges() safely
+  for (int iE = 0; iE < getNumberOfEdges(); iE++) {
+    int nFaces = getNumberOfEdgeHalfEdges(iE);
+
+    // We join corners across regular edges and singular edges
+    if (nFaces >= 2) {
+      for (int j = 0; j < nFaces; j++) {
+        int iCj = getEdgeHalfEdge(iE, j);
+        int iCj1 = getDst(iCj);
+
+        int iVj = coordMap[coordIndexRemovingIsolatedVertices[iCj]];
+        int iVj1 = coordMap[coordIndexRemovingIsolatedVertices[iCj1]];
+
+        for (int k = j + 1; k < nFaces; k++) {
+          int iCk = getEdgeHalfEdge(iE, k);
+          int iCk1 = getDst(iCk);
+
+          int iVk = coordMap[coordIndexRemovingIsolatedVertices[iCk]];
+          int iVk1 = coordMap[coordIndexRemovingIsolatedVertices[iCk1]];
+
+
+          // this case considers that the two half edges are oriented
+          if (iVj == iVk1) {
+            partitionRegularSingular.join(iCj, iCk1);
+            partitionRegularSingular.join(iCj1, iCk);
+          }
+          // Otherwise, this case considers that the two half edges are opositely oriented
+          else {
+            partitionRegularSingular.join(iCj, iCk);
+            partitionRegularSingular.join(iCj1, iCk1);
+          }
+        }
+      }
+    }
+  }
+
+  // For each vertex, count how many connected components it belongs to
+  vector<int> _nCCVertex;
+  _nCCVertex.resize(nV, 0);
+  vector<int> rootCornerToNewVertex(nC, -1);
+
+  // Create a partition of the corners by joining pairs of
+  // matching corners across regular and singular edges
+  // Even if we removed isolated vertices, the number of edges is still the same
+  // so we can use getNumberOfEdges() safely
+
+  vIndexMap.resize(nV, -1);
+  bool hasSingularVertices = false;
+  
+  for (int iC = 0; iC < nC; iC++) {
+    // For each root corner of the partition
+    //  if iC is a root corner, process it
+    if (partitionRegularSingular.find(iC) == iC) {
+      // If the corner is a face separator, skip it
+      if (coordIndexRemovingIsolatedVertices[iC] == -1)
+        continue;
+
+      // Get the vertex index of the corner
+      int iV = coordMap[coordIndexRemovingIsolatedVertices[iC]];
+
+      // Increment the number of connected components the vertex belongs to
+      _nCCVertex[iV]++;
+      // If the vertex is in more than one partition, then it means that it is singular
+      // but belongs to different components in the dual graph
+      // So, I assign a new vertex to the new CC and map it in vIndexMap
+      if (_nCCVertex[iV] > 1) {
+        rootCornerToNewVertex[iC] = nVOut;
+        nVOut++;
+        vIndexMap.push_back(iV);
+        hasSingularVertices = true;
+      }
+      // Otherwise, it is not neccesary to duplicate the vertex, because for now it is in one single CC
+      else {
+        rootCornerToNewVertex[iC] = iV;
+        vIndexMap[iV] = iV;
+      }
+    }
+  }
+
+  if (!hasSingularVertices && !removedIsolatedVertices) {
+    vIndexMap.clear();
+    coordIndexOut.clear();
+
+    return;
+  }
+  else if (!hasSingularVertices && removedIsolatedVertices) {
+    coordIndexOut = coordIndexRemovingIsolatedVertices;
+    vIndexMap = coordMap;
+    return;
+  }
+
+
+  int iCOut = 0;
+  nVOut = coordMap.size();
+  // Assign the new vertices into the coordIndexOut
+  for (int iC = 0; iC < nC; iC++) {
+
+    if (coordIndexRemovingIsolatedVertices[iC] == -1) {
+      coordIndexOut[iCOut] = -1; // face separator
+      iCOut++;
+      continue;
+    }
+
+    int iCroot = partitionRegularSingular.find(iC);
+
+    coordIndexOut[iCOut] = rootCornerToNewVertex[iCroot];
+
+    iCOut++;
+  }
+
+  // It is not necessary to repeat the computation of dualGraph because the conections
+  // between faces have not changed (since we only cut through singular vertices)
+
 
 }
-
+
 // convert to manifold
 // - removes isolated vertices, cuts through singular vertices and
 //   through singular edges
@@ -453,14 +887,130 @@ void PolygonMesh::convertToManifold
   vIndexMap.clear();
   coordIndexOut.clear();
 
-  // HINTS :
-  //
-  // - similar to the previous method, but pairs of join operations
-  //   are performed only o only consistently oriented regular edges
-  //
-  // - if the mesh is not oriented, it may be cut into multiple
-  //   connected components, and or holes will be created
-  //
-  // - to prevent these problems the orient() method should be calle
-  // - before this one
+  vector<int> coordMap;
+  vector<int> coordIndexRemovingIsolatedVertices;
+  bool removedIsolatedVertices = removeIsolatedVertices(coordMap, coordIndexRemovingIsolatedVertices);
+
+  // If we did not remove isolated vertices, we need to create an identity coordMap
+  if (!removedIsolatedVertices) {
+    coordIndexRemovingIsolatedVertices = _coordIndex;
+
+    // Make coordMap identity
+    int nV = getNumberOfVertices();
+    coordMap.resize(nV, -1);
+    for (int iV = 0; iV < nV; iV++) {
+      coordMap[iV] = iV;
+    }
+  }
+
+  int nV = getNumberOfVertices();
+  int nVOut = nV;
+  int nC = coordIndexRemovingIsolatedVertices.size();
+
+  coordIndexOut.resize(nC, -1);
+
+  Partition partition(nC);
+
+  int nE = getNumberOfEdges();
+  for (int iE = 0; iE < nE; iE++) {
+    int nFaces = getNumberOfEdgeHalfEdges(iE);
+
+    // If there is exactly two faces incident to the edge
+    // then the edge is regular and we can join the corners
+    // accross the edge
+    if (nFaces == 2) {
+
+      int iC00 = getEdgeHalfEdge(iE, 0);
+      int iC01 = getDst(iC00);
+
+      int iC10 = getEdgeHalfEdge(iE, 1);
+      int iC11 = getDst(iC10);
+
+      if (HalfEdges::isOriented(iC00)) {
+        // Consistently oriented
+        partition.join(iC00, iC11);
+        partition.join(iC01, iC10);
+      }
+      else {
+        // Oposite orientation
+        partition.join(iC00, iC10);
+        partition.join(iC01, iC11);
+      }
+    }
+  }
+
+
+
+  vector<int> rootCornerToNewVertex(nC, -1);
+  vector<int> local_nPartsVertex(nV, 0);
+
+  // Create a partition of the corners by joining pairs of
+  // matching corners across regular and singular edges
+  // Even if we removed isolated vertices, the number of edges is still the same
+  // so we can use getNumberOfEdges() safely
+
+  vIndexMap.resize(nV, -1);
+
+  bool hasSingularVertices = false;
+  for (int iC = 0; iC < nC; iC++) {
+    if (partition.find(iC) == iC) {
+      if (coordIndexRemovingIsolatedVertices[iC] == -1)
+        continue;
+      int iV = coordMap[coordIndexRemovingIsolatedVertices[iC]];
+
+      local_nPartsVertex[iV]++;
+      // If the vertex is in more than one partition, then it mean that it is singular
+      // but belongs to different components in the dual graph
+      // So, I assign a new vertex to the new CC and map it in vIndexMap
+      if (local_nPartsVertex[iV] > 1) {
+        rootCornerToNewVertex[iC] = nVOut;
+        nVOut++;
+        vIndexMap.push_back(iV);
+        hasSingularVertices = true;
+      }
+      // Otherwise, it is not neccesary to duplicate the vertex, because for now it is in one single CC
+      else {
+        rootCornerToNewVertex[iC] = iV;
+        vIndexMap[iV] = iV;
+      }
+    }
+  }
+
+  if (!hasSingularVertices && !removedIsolatedVertices) {
+    vIndexMap.clear();
+    coordIndexOut.clear();
+
+    return;
+  }
+  else if (!hasSingularVertices && removedIsolatedVertices) {
+    coordIndexOut = coordIndexRemovingIsolatedVertices;
+    vIndexMap = coordMap;
+    return;
+  }
+
+
+  int iCOut = 0;
+  nVOut = coordMap.size();
+  // Assign the new vertices into the coordIndexOut
+  for (int iC = 0; iC < nC; iC++) {
+
+    if (coordIndexRemovingIsolatedVertices[iC] == -1) {
+      coordIndexOut[iCOut] = -1; // face separator
+      iCOut++;
+      continue;
+    }
+
+    int iCroot = partition.find(iC);
+
+    coordIndexOut[iCOut] = rootCornerToNewVertex[iCroot];
+
+    iCOut++;
+  }
+
+  _hasSingularEdges = false;
+
+  _create_nPartsVertex(coordMap.size(), nC, partition);
+  _createDualGraph();
+  _createIsBoundaryVertex(coordMap.size(), nE);
+
 }

@@ -1,6 +1,6 @@
 //------------------------------------------------------------------------
 //  Copyright (C) Gabriel Taubin
-//  Time-stamp: <2025-08-05 23:12:59 taubin>
+//  Time-stamp: <2025-08-04 22:10:14 gtaubin>
 //------------------------------------------------------------------------
 //
 // Faces.hpp
@@ -33,7 +33,7 @@
 // ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
+
 #ifndef _FACES_HPP_
 #define _FACES_HPP_
 
@@ -44,7 +44,6 @@ using namespace std;
 class Faces {
   
 public:
-  
           Faces(const int nV, const vector<int>& coordIndex);
 
   // The constructor should compare the nV value passed as a parameter
@@ -89,10 +88,17 @@ public:
   int     getNextCorner(const int iC)              const;
 
 private:
+      bool isValidFaceIndex(const int iF) const {
+          return 0 <= iF && iF < _faceIndex.size();
+      }
+      bool isValidCorner(const int iC) const {
+          return 0 <= iC && iC < getNumberOfCorners() && _coordIndex[iC] > 0;
+      }
+    int _nV;
+    int _nF;
+    vector<int> _coordIndex;
+    vector<pair<int, int>> _faceIndex;
 
-  int          _nV;
-  vector<int>  _coordIndex;
-  vector<int>  _faceFirstCorner;
 };
 
 #endif /* _FACES_HPP_ */

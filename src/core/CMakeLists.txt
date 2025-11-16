@@ -35,8 +35,10 @@ add_library(${NAME}
     ${ASSETS}
 ) # add_library
 
+find_package(Eigen3 REQUIRED)
+
+
 target_compile_features(${NAME} PRIVATE cxx_lambdas)
 
-target_link_libraries(${NAME} ${LIB_LIST})
-
+target_link_libraries(${NAME} ${LIB_LIST} Eigen3::Eigen)
 

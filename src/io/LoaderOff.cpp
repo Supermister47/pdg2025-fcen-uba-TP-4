@@ -129,7 +129,7 @@ bool LoaderOff::load(const char* filename, SceneGraph& wrl) {
       throw new StrException("error parsing nEdges");
       
     // create the scene graph structure :
-    IndexedFaceSet* ifs        = _initializeSceneGraph(wrl,filename);
+    IndexedFaceSet* ifs        = _initializeSceneGraph(wrl,"SURFACE");
     vector<float>&  coord      = ifs->getCoord();
     vector<int>&    coordIndex = ifs->getCoordIndex();
 

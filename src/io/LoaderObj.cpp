@@ -142,7 +142,7 @@ bool LoaderObj::load(const char* filename, SceneGraph& wrl) {
     tknf.setSkipComments(true);
       
     // create the scene graph structure :
-    IndexedFaceSet* ifs        = _initializeSceneGraph(wrl,filename);
+    IndexedFaceSet* ifs        = _initializeSceneGraph(wrl,"SURFACE");
     vector<float>&  coord      = ifs->getCoord();
     vector<int>&    coordIndex = ifs->getCoordIndex();
 
